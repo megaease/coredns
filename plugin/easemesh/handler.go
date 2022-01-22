@@ -61,17 +61,17 @@ func (e *EaseMesh) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 	}
 	if err != nil && e.IsNameError(err) {
 		// ignored when query failed, passthrough to next (K8s) plugin
-		log.Infof("EXITED Next name: %s, type: %+v, error: %+v", qname, state.QType(), err)
+		log.Debugf("EXITED Next name: %s, type: %+v, error: %+v", qname, state.QType(), err)
 		return plugin.NextOrFailure(e.Name(), e.Next, ctx, w, r)
 	}
 	if err != nil {
-		log.Infof("EXITED BackendError name: %s, type: %+v, error: %+v", qname, state.QType(), err)
+		log.Debugf("EXITED BackendError name: %s, type: %+v, error: %+v", qname, state.QType(), err)
 		return plugin.BackendError(ctx, e, zone, dns.RcodeServerFailure, state, err, opt)
 	}
 
 	if len(records) == 0 {
 		// ignored when query no records, passthrough to next (K8s) plugin
-		log.Infof("EXITED Records is zero name: %s, type: %+v,records: %+v", qname, state.QType(), records)
+		log.Debugf("EXITED Records is zero name: %s, type: %+v,records: %+v", qname, state.QType(), records)
 		return plugin.NextOrFailure(e.Name(), e.Next, ctx, w, r)
 	}
 
@@ -81,10 +81,12 @@ func (e *EaseMesh) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 	m.Answer = append(m.Answer, records...)
 	m.Extra = append(m.Extra, extra...)
 	m.RecursionAvailable = false
-	//m.RecursionDesired = false
-	//m.Authoritative = true
-	//m.CheckingDisabled = true
-	log.Infof("EXITED Succeed name: %s, type: %+v,result: %+v", qname, state.QType(), *m)
+	// m.RecursionDesired = false
+	// m.Authoritative = true
+	// m.CheckingDisabled = true
+
+	log.Debugf("EXITED Succeed name: %s, type: %+v,result: %+v", qname, state.QType(), *m)
+
 	w.WriteMsg(m)
 	return dns.RcodeSuccess, nil
 }

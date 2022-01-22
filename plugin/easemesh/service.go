@@ -15,9 +15,9 @@ const (
 )
 
 var (
-	errKeyNotFound    = errors.New("Key was not found")
-	errRequestInvalid = errors.New("Request parse error")
-	errPodRequest     = errors.New("Name is a pod")
+	errKeyNotFound    = errors.New("key not found")
+	errRequestInvalid = errors.New("request parse error")
+	errPodRequest     = errors.New("name is a pod")
 )
 
 // Service is bussiness logic unit registered in the registry of the EaseMesh

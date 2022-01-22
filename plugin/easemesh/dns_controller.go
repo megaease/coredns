@@ -3,13 +3,21 @@ package easemesh
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
+	"reflect"
+	"sort"
+	"sync"
 	"time"
 
-	"github.com/megaease/easegress/pkg/logger"
 	"github.com/megaease/easegress/pkg/object/meshcontroller/spec"
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	etcdcv3 "go.etcd.io/etcd/client/v3"
 	"gopkg.in/yaml.v2"
+)
+
+const (
+	refreshInterval = 5 * time.Second
+	servicePrefix   = "/mesh/service-spec/"
 )
 
 // EasegressClient is the client of the easemesh control plane
@@ -19,19 +27,24 @@ type dnsController interface {
 }
 
 type easegressClient struct {
-	cli        *etcdcv3.Client
-	done       chan struct{}
-	services   []*Service
-	serviceMap map[string]*Service
+	clientConfig *etcdcv3.Config
+	clientMutex  sync.RWMutex
+	client       *etcdcv3.Client
+
+	servicesMutex sync.RWMutex
+	services      []*Service
+	servicesMap   map[string]*Service
+
+	done chan struct{}
 }
 
-const servicePrefix = "/mesh/service-spec/"
-
 func newDNSController(endpoints []string, cc *tls.Config, username, password string) (dnsController, error) {
+	// FIXME: Query endpoint from service name easemesh-controlplane-svc.
+
 	etcdCfg := etcdcv3.Config{
 		Endpoints:            endpoints,
 		TLS:                  cc,
-		AutoSyncInterval:     1 * time.Minute,
+		AutoSyncInterval:     0,
 		DialTimeout:          10 * time.Second,
 		DialKeepAliveTime:    1 * time.Minute,
 		DialKeepAliveTimeout: 1 * time.Minute,
@@ -40,77 +53,120 @@ func newDNSController(endpoints []string, cc *tls.Config, username, password str
 		etcdCfg.Username = username
 		etcdCfg.Password = password
 	}
-	client := &easegressClient{cli: nil, done: make(chan struct{})}
-	go client.connectEasegress(etcdCfg)
+
+	client := &easegressClient{
+		clientConfig: &etcdCfg,
+		done:         make(chan struct{}),
+	}
+
 	go client.refreshServices()
+
 	return client, nil
 
 }
 
-func (e *easegressClient) connectEasegress(etcdCfg etcdcv3.Config) {
-	ctx := context.Background()
-	defaultDuration := time.Second * 5
+func (e *easegressClient) getClient() (*etcdcv3.Client, error) {
+	e.clientMutex.RLock()
+	if e.client != nil {
+		client := e.client
+		e.clientMutex.RUnlock()
+		return client, nil
+	}
+	e.clientMutex.RUnlock()
 
-	connect := func(d time.Duration) *etcdcv3.Client {
-		timeoutCtx, cancel := context.WithTimeout(ctx, d)
-		defer cancel()
-		etcdCfg.Context = timeoutCtx
-		cli, err := etcdcv3.New(etcdCfg)
-		if err != nil {
-			return nil
-		}
-		return cli
+	return e.buildClient()
+}
+
+func (e *easegressClient) buildClient() (*etcdcv3.Client, error) {
+	e.clientMutex.Lock()
+	defer e.clientMutex.Unlock()
+
+	if e.client != nil {
+		return e.client, nil
 	}
 
-	for {
-		C := time.After(defaultDuration)
-		select {
-		case <-C:
-			if e.cli != nil {
-				return
-			}
-			e.cli = connect(defaultDuration)
-		}
+	log.Infof("etcd config: %+v", *e.clientConfig)
+	client, err := etcdcv3.New(*e.clientConfig)
+	if err != nil {
+		return nil, err
 	}
 
+	e.client = client
+
+	return client, nil
+}
+
+func (e *easegressClient) updateServices(services []*Service, servicesMap map[string]*Service) {
+	e.servicesMutex.Lock()
+	oldServices := e.services
+	e.services, e.servicesMap = services, servicesMap
+	e.servicesMutex.Unlock()
+
+	oldServiceNames := []string{}
+	for _, service := range oldServices {
+		oldServiceNames = append(oldServiceNames, service.Name)
+	}
+	sort.Strings(oldServiceNames)
+
+	serviceNames := []string{}
+	for _, service := range services {
+		serviceNames = append(serviceNames, service.Name)
+	}
+	sort.Strings(serviceNames)
+
+	if !reflect.DeepEqual(oldServiceNames, serviceNames) {
+		log.Infof("update services from %v to: %v", oldServiceNames, serviceNames)
+	}
 }
 
 func (e *easegressClient) ServiceList() []*Service {
-	return e.services
+	e.servicesMutex.RLock()
+	defer e.servicesMutex.RUnlock()
+
+	services := make([]*Service, len(e.services))
+	copy(services, e.services)
+
+	return services
 }
 
 func (e *easegressClient) ServiceByName(name string) []*Service {
-	serviceMap := e.serviceMap
-	if serviceMap != nil {
-		if serviceMap[name] != nil {
-			return []*Service{serviceMap[name]}
+	e.servicesMutex.RLock()
+	defer e.servicesMutex.RUnlock()
+
+	if len(e.servicesMap) != 0 {
+		if e.servicesMap[name] != nil {
+			return []*Service{e.servicesMap[name]}
 		}
 	}
+
 	return nil
 }
 
 func (e *easegressClient) refreshServices() {
 	ctx := context.Background()
-	defaultDuration := time.Second * 5
 	defer func() {
 		e.done = nil
 	}()
 
-	duration := defaultDuration
+	duration := refreshInterval
 	for {
 		C := time.After(duration)
 		select {
 		case <-C:
 			start := time.Now()
-			services, serviceMap := e.fetchServices(ctx)
-			e.services = services
-			e.serviceMap = serviceMap
+			services, servicesMap, err := e.fetchServices(ctx)
+			if err != nil {
+				log.Errorf("fetch services failed: %v", err)
+			} else {
+				e.updateServices(services, servicesMap)
+			}
+
 			now := time.Now()
 			elapse := now.Sub(start)
-			if elapse > defaultDuration {
+			if elapse > refreshInterval {
 				duration = time.Microsecond * 1
 			} else {
-				duration = defaultDuration - elapse
+				duration = refreshInterval - elapse
 			}
 		case <-e.done:
 			return
@@ -118,27 +174,29 @@ func (e *easegressClient) refreshServices() {
 	}
 }
 
-func (e *easegressClient) fetchServices(ctx context.Context) ([]*Service, map[string]*Service) {
+func (e *easegressClient) fetchServices(ctx context.Context) (
+	[]*Service, map[string]*Service, error) {
 
-	// etcd client isn't ready
-	if e.cli == nil {
-		return nil, nil
+	client, err := e.getClient()
+	if err != nil {
+		return nil, nil, fmt.Errorf("get etcd client failed %v: %v", e.clientConfig.Endpoints, err)
 	}
 
 	timeoutCtx, cancel := context.WithTimeout(ctx, time.Second*5)
 	defer cancel()
-	resp, err := getPrefix(timeoutCtx, e.cli, servicePrefix)
+
+	resp, err := getPrefix(timeoutCtx, client, servicePrefix)
 	if err != nil {
-		log.Errorf("fetch %s error %s", servicePrefix, err)
-		return nil, nil
+		return nil, nil, fmt.Errorf("get prefix %s failed: %s", servicePrefix, err)
 	}
+
 	services := []*Service{}
 	serviceMap := map[string]*Service{}
 	for _, v := range resp {
 		serviceSpec := &spec.Service{}
 		err := yaml.Unmarshal([]byte(v), serviceSpec)
 		if err != nil {
-			logger.Errorf("BUG: unmarshal %s to yaml failed: %v", v, err)
+			log.Errorf("BUG: unmarshal %s to yaml failed: %v", v, err)
 			continue
 		}
 		service := &Service{
@@ -150,7 +208,7 @@ func (e *easegressClient) fetchServices(ctx context.Context) ([]*Service, map[st
 		serviceMap[serviceSpec.Name] = service
 
 	}
-	return services, serviceMap
+	return services, serviceMap, nil
 }
 
 func getPrefix(ctx context.Context, cli *etcdcv3.Client, prefix string) (map[string]string, error) {

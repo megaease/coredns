@@ -17,7 +17,7 @@ import (
 const loopbackIpv4 = "127.0.0.1"
 const loopbackIpv6 = "::1"
 
-// EaseMesh is client of the easegress
+// EaseMesh is the Client to communicate with EaseMesh control plane.
 type EaseMesh struct {
 	Next          plugin.Handler
 	dnsController dnsController
@@ -55,7 +55,7 @@ func (e *EaseMesh) Services(ctx context.Context, state request.Request, exact bo
 		return
 	}
 
-	// SRV for external services is not yet implemented, so remove those records.
+	// SRV for external services has not been implemented yet, so remove those records.
 	if state.QType() != dns.TypeSRV {
 		return services, err
 	}

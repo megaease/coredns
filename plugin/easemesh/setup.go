@@ -90,9 +90,6 @@ func parseMeshConfig(c *caddy.Controller) (config MeshConfig, err error) {
 		switch c.Val() {
 		case "endpoint":
 			args := c.RemainingArgs()
-			if len(args) == 0 {
-				return config, c.ArgErr()
-			}
 			config.Endpoints = args
 		case "tls": // cert key cacertfile
 			args := c.RemainingArgs()
@@ -143,9 +140,20 @@ func New(zones []string) *EaseMesh {
 
 // NewFromConfig creates the EaseMesh plugin from configuration
 func NewFromConfig(config MeshConfig) (*EaseMesh, error) {
-
 	easemesh := EaseMesh{}
-	controller, err := newDNSController(config.Endpoints, config.TLSConfig,
+
+	endpoints := config.Endpoints
+
+	dynamicEndpoint, err := getEaseMeshEndpoint()
+	if err != nil {
+		log.Errorf("get easemesh endpoints failed: %v", err)
+		log.Infof("use static config easemesh endpoints: %v", endpoints)
+	} else {
+		log.Infof("use dynamically fetched easemesh endpoints: %v", dynamicEndpoint)
+		endpoints = []string{dynamicEndpoint}
+	}
+
+	controller, err := newDNSController(endpoints, config.TLSConfig,
 		config.Username, config.Password)
 	if err != nil {
 		return &EaseMesh{}, err

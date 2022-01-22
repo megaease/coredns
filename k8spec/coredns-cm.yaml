@@ -8,7 +8,8 @@ data:
         }
         ready
         easemesh cluster.local {
-          endpoint http://{change_me_to_cluster_ip_of_easemesh_control_plane}:2379
+          # endpoint could be retrieved by the plugin on its own.
+          # endpoint http://{change_me_to_cluster_ip_of_easemesh_control_plane}:2379
         }
         kubernetes cluster.local in-addr.arpa ip6.arpa {
           pods insecure

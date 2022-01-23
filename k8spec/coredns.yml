@@ -16,8 +16,6 @@ spec:
       k8s-app: kube-dns
   template:
     metadata:
-      annotations:
-        seccomp.security.alpha.kubernetes.io/pod: runtime/default
       labels:
         k8s-app: kube-dns
     spec:
@@ -41,8 +39,8 @@ spec:
       - args:
         - -conf
         - /etc/coredns/Corefile
-        image: megaease/coredns:1.8.4-easemesh
-        imagePullPolicy: Always
+        image: megaease/coredns:latest
+        imagePullPolicy: IfNotPresent
         livenessProbe:
           failureThreshold: 10
           httpGet:

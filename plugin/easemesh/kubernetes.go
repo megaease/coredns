@@ -42,7 +42,7 @@ func getEaseMeshEndpoint() (string, error) {
 	}
 
 	service, err := k8sClientset.CoreV1().Services("easemesh").Get(context.Background(),
-		"easemesh-controlplane-svc", metav1.GetOptions{})
+		"easemesh-control-plane-service", metav1.GetOptions{})
 	if err != nil {
 		return "", fmt.Errorf("get easemesh-controlplane-svc failed: %v", err)
 	}
